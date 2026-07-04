@@ -50,7 +50,7 @@ jobs:
           if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
             BUILD_TASK="assembleRelease"
           fi
-          ./gradlew $BUILD_TASK --no-daemon
+          ./gradlew $BUILD_TASK --no-daemon --warning-mode=none -Dorg.gradle.configureondemand=false
 
       - name: Find and upload APK
         run: |

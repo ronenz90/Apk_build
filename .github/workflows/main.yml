@@ -21,6 +21,8 @@ jobs:
         run: |
           curl -L "${{ github.event.inputs.download_url }}" -o project.zip
           unzip project.zip -d project
+          echo "=== ZIP contents (top level) ==="
+          find project -maxdepth 3 -type f | head -30
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -30,32 +32,94 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: >-
+            tools
+            platform-tools
+            platforms;android-34
+            platforms;android-33
+            platforms;android-32
+            build-tools;34.0.0
+            build-tools;33.0.2
+
+      - name: Find project root
+        id: find_root
+        run: |
+          # Try settings.gradle first, then settings.gradle.kts
+          SETTINGS=$(find project -maxdepth 5 \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -1)
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: No settings.gradle found!"
+            find project -type f | head -50
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$SETTINGS")
+          echo "project_dir=$PROJECT_DIR" >> $GITHUB_OUTPUT
+          echo "Found project at: $PROJECT_DIR"
+
+      - name: Setup local.properties
+        run: |
+          PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$PROJECT_DIR/local.properties"
+          echo "Written local.properties with sdk.dir=$ANDROID_SDK_ROOT"
+
+      - name: Setup gradlew
+        run: |
+          PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
+          cd "$PROJECT_DIR"
+          if [ ! -f "gradlew" ]; then
+            echo "gradlew not found, generating with gradle wrapper..."
+            gradle wrapper --gradle-version=8.4
+          fi
+          chmod +x gradlew
+          echo "gradlew ready"
 
       - name: Build APK
         run: |
-          cd project
-          PROJECT_DIR=$(find . -name "settings.gradle" -maxdepth 4 | head -1 | xargs dirname)
-          echo "Found project at: $PROJECT_DIR"
+          PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
           cd "$PROJECT_DIR"
-
-          if [ ! -f "gradlew" ]; then
-            echo "gradlew not found, using system gradle"
-            gradle wrapper
-            chmod +x gradlew
-          else
-            chmod +x gradlew
-          fi
 
           BUILD_TASK="assembleDebug"
           if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
             BUILD_TASK="assembleRelease"
           fi
-          ./gradlew $BUILD_TASK --no-daemon --warning-mode=none -Dorg.gradle.configureondemand=false
 
-      - name: Find and upload APK
+          echo "Running: ./gradlew $BUILD_TASK"
+          ./gradlew $BUILD_TASK \
+            --no-daemon \
+            --stacktrace \
+            -Pandroid.useAndroidX=true \
+            -Pandroid.enableJetifier=true \
+            2>&1
+
+      - name: Find APK
+        id: find_apk
         run: |
-          APK=$(find . -name "*.apk" | grep -v unsigned | head -1)
-          echo "Found APK: $APK"
-          curl -X POST "${{ github.event.inputs.callback_url }}" \
+          PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
+          APK=$(find "$PROJECT_DIR" -name "*.apk" | grep -v unsigned | head -1)
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK found after build!"
+            find "$PROJECT_DIR/app/build" -type f 2>/dev/null | head -20
+            exit 1
+          fi
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+          echo "Found APK: $APK ($(du -sh $APK | cut -f1))"
+
+      - name: Upload APK to callback
+        run: |
+          APK="${{ steps.find_apk.outputs.apk_path }}"
+          CALLBACK="${{ github.event.inputs.callback_url }}"
+          echo "Uploading APK to: $CALLBACK"
+          HTTP_CODE=$(curl -s -o /tmp/callback_response.txt -w "%{http_code}" \
+            -X POST "$CALLBACK" \
             -F "apk=@$APK" \
-            -F "status=success"
+            -F "status=success")
+          echo "Response code: $HTTP_CODE"
+          cat /tmp/callback_response.txt
+
+      - name: Notify failure
+        if: failure()
+        run: |
+          CALLBACK="${{ github.event.inputs.callback_url }}"
+          curl -s -X POST "$CALLBACK" \
+            -F "status=error" \
+            -F "error=Build failed - check GitHub Actions logs"

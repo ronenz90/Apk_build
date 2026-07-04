@@ -1,0 +1,46 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      download_url:
+        description: 'ZIP download URL'
+        required: true
+      build_type:
+        description: 'debug or release'
+        default: 'debug'
+      callback_url:
+        description: 'Callback URL when done'
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download ZIP
+        run: |
+          curl -L "${{ github.event.inputs.download_url }}" -o project.zip
+          unzip project.zip -d project
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build APK
+        run: |
+          cd project
+          cd $(find . -name "gradlew" -maxdepth 3 | head -1 | xargs dirname)
+          chmod +x gradlew
+          ./gradlew assemble${{ github.event.inputs.build_type == 'release' && 'Release' || 'Debug' }} --no-daemon
+
+      - name: Find and upload APK
+        run: |
+          APK=$(find . -name "*.apk" | grep -v unsigned | head -1)
+          curl -X POST "${{ github.event.inputs.callback_url }}" \
+            -F "apk=@$APK" \
+            -F "status=success"

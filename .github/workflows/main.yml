@@ -12,6 +12,10 @@ on:
       callback_url:
         description: 'Callback URL when done'
         required: true
+      project_name:
+        description: 'Original ZIP filename (without .zip)'
+        required: false
+        default: 'app'
 
 jobs:
   build:
@@ -45,7 +49,6 @@ jobs:
       - name: Find project root
         id: find_root
         run: |
-          # Try settings.gradle first, then settings.gradle.kts
           SETTINGS=$(find project -maxdepth 5 \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -1)
           if [ -z "$SETTINGS" ]; then
             echo "ERROR: No settings.gradle found!"
@@ -60,55 +63,52 @@ jobs:
         run: |
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
           echo "sdk.dir=$ANDROID_SDK_ROOT" > "$PROJECT_DIR/local.properties"
-          echo "Written local.properties with sdk.dir=$ANDROID_SDK_ROOT"
 
       - name: Setup gradlew
         run: |
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
           cd "$PROJECT_DIR"
           if [ ! -f "gradlew" ]; then
-            echo "gradlew not found, generating with gradle wrapper..."
             gradle wrapper --gradle-version=8.4
           fi
           chmod +x gradlew
-          echo "gradlew ready"
 
       - name: Build APK
         run: |
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
           cd "$PROJECT_DIR"
-
           BUILD_TASK="assembleDebug"
           if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
             BUILD_TASK="assembleRelease"
           fi
-
-          echo "Running: ./gradlew $BUILD_TASK"
           ./gradlew $BUILD_TASK \
             --no-daemon \
             --stacktrace \
             -Pandroid.useAndroidX=true \
-            -Pandroid.enableJetifier=true \
-            2>&1
+            -Pandroid.enableJetifier=true
 
-      - name: Find APK
+      - name: Find APK and rename
         id: find_apk
         run: |
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
           APK=$(find "$PROJECT_DIR" -name "*.apk" | grep -v unsigned | head -1)
           if [ -z "$APK" ]; then
-            echo "ERROR: No APK found after build!"
-            find "$PROJECT_DIR/app/build" -type f 2>/dev/null | head -20
+            echo "ERROR: No APK found!"
             exit 1
           fi
-          echo "apk_path=$APK" >> $GITHUB_OUTPUT
-          echo "Found APK: $APK ($(du -sh $APK | cut -f1))"
+          # Rename to project name
+          PROJECT_NAME="${{ github.event.inputs.project_name }}"
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          NEW_NAME="${PROJECT_NAME}-${BUILD_TYPE}.apk"
+          NEW_PATH="/tmp/${NEW_NAME}"
+          cp "$APK" "$NEW_PATH"
+          echo "apk_path=$NEW_PATH" >> $GITHUB_OUTPUT
+          echo "Renamed APK to: $NEW_NAME ($(du -sh $NEW_PATH | cut -f1))"
 
       - name: Upload APK to callback
         run: |
           APK="${{ steps.find_apk.outputs.apk_path }}"
           CALLBACK="${{ github.event.inputs.callback_url }}"
-          echo "Uploading APK to: $CALLBACK"
           HTTP_CODE=$(curl -s -o /tmp/callback_response.txt -w "%{http_code}" \
             -X POST "$CALLBACK" \
             -F "apk=@$APK" \
@@ -119,7 +119,6 @@ jobs:
       - name: Notify failure
         if: failure()
         run: |
-          CALLBACK="${{ github.event.inputs.callback_url }}"
-          curl -s -X POST "$CALLBACK" \
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
             -F "status=error" \
             -F "error=Build failed - check GitHub Actions logs"

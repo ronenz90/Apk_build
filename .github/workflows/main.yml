@@ -34,13 +34,26 @@ jobs:
       - name: Build APK
         run: |
           cd project
-          cd $(find . -name "gradlew" -maxdepth 3 | head -1 | xargs dirname)
+          GRADLE_PATH=$(find . -name "gradlew" -maxdepth 4 | head -1)
+          if [ -z "$GRADLE_PATH" ]; then
+            echo "gradlew not found!"
+            find . -type f -name "*.gradle" | head -20
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$GRADLE_PATH")
+          echo "Found project at: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
           chmod +x gradlew
-          ./gradlew assemble${{ github.event.inputs.build_type == 'release' && 'Release' || 'Debug' }} --no-daemon
+          BUILD_TASK="assembleDebug"
+          if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
+            BUILD_TASK="assembleRelease"
+          fi
+          ./gradlew $BUILD_TASK --no-daemon
 
       - name: Find and upload APK
         run: |
           APK=$(find . -name "*.apk" | grep -v unsigned | head -1)
+          echo "Found APK: $APK"
           curl -X POST "${{ github.event.inputs.callback_url }}" \
             -F "apk=@$APK" \
             -F "status=success"

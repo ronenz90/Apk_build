@@ -91,12 +91,15 @@ jobs:
         id: find_apk
         run: |
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
-          APK=$(find "$PROJECT_DIR" -name "*.apk" | grep -v unsigned | head -1)
+          # For release, take unsigned if no signed found
+          APK=$(find "$PROJECT_DIR" -name "*.apk" | grep -v "unsigned" | head -1)
+          if [ -z "$APK" ]; then
+            APK=$(find "$PROJECT_DIR" -name "*.apk" | head -1)
+          fi
           if [ -z "$APK" ]; then
             echo "ERROR: No APK found!"
             exit 1
           fi
-          # Rename to project name
           PROJECT_NAME="${{ github.event.inputs.project_name }}"
           BUILD_TYPE="${{ github.event.inputs.build_type }}"
           NEW_NAME="${PROJECT_NAME}-${BUILD_TYPE}.apk"
@@ -104,7 +107,7 @@ jobs:
           cp "$APK" "$NEW_PATH"
           echo "apk_path=$NEW_PATH" >> $GITHUB_OUTPUT
           echo "Renamed APK to: $NEW_NAME ($(du -sh $NEW_PATH | cut -f1))"
-
+          
       - name: Upload APK to callback
         run: |
           APK="${{ steps.find_apk.outputs.apk_path }}"

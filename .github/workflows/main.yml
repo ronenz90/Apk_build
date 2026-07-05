@@ -25,7 +25,7 @@ jobs:
         run: |
           curl -L "${{ github.event.inputs.download_url }}" -o project.zip
           unzip project.zip -d project
-          echo "=== ZIP contents (top level) ==="
+          echo "=== ZIP contents ==="
           find project -maxdepth 3 -type f | head -30
 
       - name: Setup Java
@@ -52,7 +52,6 @@ jobs:
           SETTINGS=$(find project -maxdepth 5 \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -1)
           if [ -z "$SETTINGS" ]; then
             echo "ERROR: No settings.gradle found!"
-            find project -type f | head -50
             exit 1
           fi
           PROJECT_DIR=$(dirname "$SETTINGS")
@@ -63,18 +62,15 @@ jobs:
         run: |
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
           echo "sdk.dir=$ANDROID_SDK_ROOT" > "$PROJECT_DIR/local.properties"
-          echo "Written local.properties with sdk.dir=$ANDROID_SDK_ROOT"
 
       - name: Setup gradlew
         run: |
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
           cd "$PROJECT_DIR"
           if [ ! -f "gradlew" ]; then
-            echo "gradlew not found, generating with gradle wrapper..."
             gradle wrapper --gradle-version=8.4
           fi
           chmod +x gradlew
-          echo "gradlew ready"
 
       - name: Build APK
         run: |
@@ -94,36 +90,68 @@ jobs:
             -Pandroid.enableJetifier=true \
             2>&1
 
-      - name: Find APK and rename
+      - name: Find APK
         id: find_apk
         run: |
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
-
-          # Try to find signed APK first, then fall back to unsigned
-          APK=$(find "$PROJECT_DIR" -name "*.apk" | grep -v "unsigned" | head -1)
+          # Get any APK (signed or unsigned)
+          APK=$(find "$PROJECT_DIR" -name "*.apk" | head -1)
           if [ -z "$APK" ]; then
-            echo "No signed APK found, trying unsigned..."
-            APK=$(find "$PROJECT_DIR" -name "*.apk" | head -1)
-          fi
-          if [ -z "$APK" ]; then
-            echo "ERROR: No APK found after build!"
-            find "$PROJECT_DIR/app/build" -type f 2>/dev/null | head -20
+            echo "ERROR: No APK found!"
             exit 1
           fi
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+          echo "Found APK: $APK"
 
+      - name: Sign APK (Release only)
+        id: sign_apk
+        if: github.event.inputs.build_type == 'release'
+        run: |
+          # Decode keystore
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > /tmp/release.jks
+
+          # Find apksigner
+          APKSIGNER=$(find $ANDROID_SDK_ROOT/build-tools -name "apksigner" | sort -r | head -1)
+          echo "Using apksigner: $APKSIGNER"
+
+          APK="${{ steps.find_apk.outputs.apk_path }}"
+          SIGNED_APK="/tmp/signed.apk"
+
+          # Sign the APK
+          $APKSIGNER sign \
+            --ks /tmp/release.jks \
+            --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
+            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+            --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
+            --out "$SIGNED_APK" \
+            "$APK"
+
+          # Verify
+          $APKSIGNER verify "$SIGNED_APK"
+          echo "APK signed and verified successfully!"
+          echo "signed_apk=$SIGNED_APK" >> $GITHUB_OUTPUT
+
+      - name: Rename and prepare APK
+        id: prepare_apk
+        run: |
           PROJECT_NAME="${{ github.event.inputs.project_name }}"
           BUILD_TYPE="${{ github.event.inputs.build_type }}"
           NEW_NAME="${PROJECT_NAME}-${BUILD_TYPE}.apk"
           NEW_PATH="/tmp/${NEW_NAME}"
-          cp "$APK" "$NEW_PATH"
+
+          if [ "$BUILD_TYPE" = "release" ]; then
+            cp "${{ steps.sign_apk.outputs.signed_apk }}" "$NEW_PATH"
+          else
+            cp "${{ steps.find_apk.outputs.apk_path }}" "$NEW_PATH"
+          fi
+
           echo "apk_path=$NEW_PATH" >> $GITHUB_OUTPUT
-          echo "Renamed APK to: $NEW_NAME ($(du -sh $NEW_PATH | cut -f1))"
+          echo "Final APK: $NEW_NAME ($(du -sh $NEW_PATH | cut -f1))"
 
       - name: Upload APK to callback
         run: |
-          APK="${{ steps.find_apk.outputs.apk_path }}"
+          APK="${{ steps.prepare_apk.outputs.apk_path }}"
           CALLBACK="${{ github.event.inputs.callback_url }}"
-          echo "Uploading APK to: $CALLBACK"
           HTTP_CODE=$(curl -s -o /tmp/callback_response.txt -w "%{http_code}" \
             -X POST "$CALLBACK" \
             -F "apk=@$APK" \
@@ -134,7 +162,6 @@ jobs:
       - name: Notify failure
         if: failure()
         run: |
-          CALLBACK="${{ github.event.inputs.callback_url }}"
-          curl -s -X POST "$CALLBACK" \
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
             -F "status=error" \
             -F "error=Build failed - check GitHub Actions logs"

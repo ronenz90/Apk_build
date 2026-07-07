@@ -84,11 +84,9 @@ jobs:
             exit 0
           fi
 
-          # Detect Groovy or Kotlin DSL
           if [ -f "$BUILD_GRADLE" ]; then
             GRADLE_FILE="$BUILD_GRADLE"
             echo "Using Groovy DSL: $GRADLE_FILE"
-
             if [ -n "$VERSION_NAME" ]; then
               sed -i "s/versionName \".*\"/versionName \"$VERSION_NAME\"/" "$GRADLE_FILE"
               echo "Set versionName = $VERSION_NAME"
@@ -97,11 +95,9 @@ jobs:
               sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/" "$GRADLE_FILE"
               echo "Set versionCode = $VERSION_CODE"
             fi
-
           elif [ -f "$BUILD_GRADLE_KTS" ]; then
             GRADLE_FILE="$BUILD_GRADLE_KTS"
             echo "Using Kotlin DSL: $GRADLE_FILE"
-
             if [ -n "$VERSION_NAME" ]; then
               sed -i "s/versionName = \".*\"/versionName = \"$VERSION_NAME\"/" "$GRADLE_FILE"
               echo "Set versionName = $VERSION_NAME"
@@ -114,17 +110,38 @@ jobs:
             echo "WARNING: app/build.gradle not found — cannot override version"
           fi
 
-          echo "=== Final version in build.gradle ==="
+          echo "=== Final version ==="
           grep -E "versionCode|versionName" "$GRADLE_FILE" || true
 
       - name: Setup gradlew
         run: |
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
           cd "$PROJECT_DIR"
+
           if [ ! -f "gradlew" ]; then
-            gradle wrapper --gradle-version=8.4
+            echo "gradlew not found — detecting Gradle version from project..."
+
+            # נסה לקרוא גרסה מ-wrapper properties אם קיים
+            if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+              GRADLE_VER=$(grep distributionUrl gradle/wrapper/gradle-wrapper.properties | grep -oP '\d+\.\d+(\.\d+)?' | head -1)
+              echo "Detected Gradle version: $GRADLE_VER"
+            fi
+
+            # ברירת מחדל 8.7 אם לא נמצא
+            GRADLE_VER=${GRADLE_VER:-8.7}
+            echo "Generating gradlew with Gradle $GRADLE_VER"
+            gradle wrapper --gradle-version=$GRADLE_VER
+          else
+            echo "gradlew found — using project's wrapper"
+            # קרא את הגרסה מה-wrapper הקיים
+            if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+              GRADLE_VER=$(grep distributionUrl gradle/wrapper/gradle-wrapper.properties | grep -oP '\d+\.\d+(\.\d+)?' | head -1)
+              echo "Project Gradle version: $GRADLE_VER"
+            fi
           fi
+
           chmod +x gradlew
+          echo "gradlew ready"
 
       - name: Build
         run: |
@@ -217,7 +234,6 @@ jobs:
             FINAL_PATH="${{ steps.find_output.outputs.output_path }}"
           fi
 
-          # כלול מספר גרסה בשם הקובץ אם סופק
           if [ -n "$VERSION_NAME" ]; then
             NEW_NAME="${PROJECT_NAME}-v${VERSION_NAME}-${BUILD_TYPE}.${EXT}"
           else

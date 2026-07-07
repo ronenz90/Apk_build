@@ -16,6 +16,14 @@ on:
         description: 'Original ZIP filename (without .zip)'
         required: false
         default: 'app'
+      version_name:
+        description: 'Version name (e.g. 1.2.0) — leave empty to use from ZIP'
+        required: false
+        default: ''
+      version_code:
+        description: 'Version code (integer, e.g. 12) — leave empty to use from ZIP'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -63,6 +71,52 @@ jobs:
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
           echo "sdk.dir=$ANDROID_SDK_ROOT" > "$PROJECT_DIR/local.properties"
 
+      - name: Override version (if provided)
+        run: |
+          PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
+          VERSION_NAME="${{ github.event.inputs.version_name }}"
+          VERSION_CODE="${{ github.event.inputs.version_code }}"
+          BUILD_GRADLE="$PROJECT_DIR/app/build.gradle"
+          BUILD_GRADLE_KTS="$PROJECT_DIR/app/build.gradle.kts"
+
+          if [ -z "$VERSION_NAME" ] && [ -z "$VERSION_CODE" ]; then
+            echo "No version override — using values from ZIP"
+            exit 0
+          fi
+
+          # Detect Groovy or Kotlin DSL
+          if [ -f "$BUILD_GRADLE" ]; then
+            GRADLE_FILE="$BUILD_GRADLE"
+            echo "Using Groovy DSL: $GRADLE_FILE"
+
+            if [ -n "$VERSION_NAME" ]; then
+              sed -i "s/versionName \".*\"/versionName \"$VERSION_NAME\"/" "$GRADLE_FILE"
+              echo "Set versionName = $VERSION_NAME"
+            fi
+            if [ -n "$VERSION_CODE" ]; then
+              sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/" "$GRADLE_FILE"
+              echo "Set versionCode = $VERSION_CODE"
+            fi
+
+          elif [ -f "$BUILD_GRADLE_KTS" ]; then
+            GRADLE_FILE="$BUILD_GRADLE_KTS"
+            echo "Using Kotlin DSL: $GRADLE_FILE"
+
+            if [ -n "$VERSION_NAME" ]; then
+              sed -i "s/versionName = \".*\"/versionName = \"$VERSION_NAME\"/" "$GRADLE_FILE"
+              echo "Set versionName = $VERSION_NAME"
+            fi
+            if [ -n "$VERSION_CODE" ]; then
+              sed -i "s/versionCode = [0-9]*/versionCode = $VERSION_CODE/" "$GRADLE_FILE"
+              echo "Set versionCode = $VERSION_CODE"
+            fi
+          else
+            echo "WARNING: app/build.gradle not found — cannot override version"
+          fi
+
+          echo "=== Final version in build.gradle ==="
+          grep -E "versionCode|versionName" "$GRADLE_FILE" || true
+
       - name: Setup gradlew
         run: |
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
@@ -77,11 +131,9 @@ jobs:
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
           cd "$PROJECT_DIR"
 
-          BUILD_TYPE="${{ github.event.inputs.build_type }}"
-
-          if [ "$BUILD_TYPE" = "aab" ]; then
+          if [ "${{ github.event.inputs.build_type }}" = "aab" ]; then
             BUILD_TASK="bundleRelease"
-          elif [ "$BUILD_TYPE" = "release" ]; then
+          elif [ "${{ github.event.inputs.build_type }}" = "release" ]; then
             BUILD_TASK="assembleRelease"
           else
             BUILD_TASK="assembleDebug"
@@ -123,7 +175,6 @@ jobs:
           OUTPUT="${{ steps.find_output.outputs.output_path }}"
 
           if [ "$BUILD_TYPE" = "aab" ]; then
-            # Sign AAB with jarsigner
             SIGNED="/tmp/signed.aab"
             jarsigner \
               -keystore /tmp/release.jks \
@@ -134,7 +185,6 @@ jobs:
               "${{ secrets.KEY_ALIAS }}"
             echo "AAB signed successfully"
           else
-            # Sign APK with apksigner
             APKSIGNER=$(find $ANDROID_SDK_ROOT/build-tools -name "apksigner" | sort -r | head -1)
             SIGNED="/tmp/signed.apk"
             $APKSIGNER sign \
@@ -147,7 +197,6 @@ jobs:
             $APKSIGNER verify "$SIGNED"
             echo "APK signed and verified"
           fi
-
           echo "signed_path=$SIGNED" >> $GITHUB_OUTPUT
 
       - name: Prepare final file
@@ -155,6 +204,7 @@ jobs:
         run: |
           PROJECT_NAME="${{ github.event.inputs.project_name }}"
           BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          VERSION_NAME="${{ github.event.inputs.version_name }}"
 
           if [ "$BUILD_TYPE" = "aab" ]; then
             EXT="aab"
@@ -167,7 +217,13 @@ jobs:
             FINAL_PATH="${{ steps.find_output.outputs.output_path }}"
           fi
 
-          NEW_NAME="${PROJECT_NAME}-${BUILD_TYPE}.${EXT}"
+          # כלול מספר גרסה בשם הקובץ אם סופק
+          if [ -n "$VERSION_NAME" ]; then
+            NEW_NAME="${PROJECT_NAME}-v${VERSION_NAME}-${BUILD_TYPE}.${EXT}"
+          else
+            NEW_NAME="${PROJECT_NAME}-${BUILD_TYPE}.${EXT}"
+          fi
+
           NEW_PATH="/tmp/${NEW_NAME}"
           cp "$FINAL_PATH" "$NEW_PATH"
           echo "final_path=$NEW_PATH" >> $GITHUB_OUTPUT

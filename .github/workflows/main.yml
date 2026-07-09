@@ -143,6 +143,18 @@ jobs:
           chmod +x gradlew
           echo "gradlew ready"
 
+      - name: Fix Kotlin duplicate classes
+        run: |
+          PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
+          GRADLE_PROPS="$PROJECT_DIR/gradle.properties"
+
+          # הוסף פתרון לכפילות Kotlin
+          echo "" >> "$GRADLE_PROPS"
+          echo "# Fix duplicate Kotlin stdlib" >> "$GRADLE_PROPS"
+          echo "android.suppressUnsupportedCompileSdk=34" >> "$GRADLE_PROPS"
+          echo "kotlin.stdlib.default.dependency=false" >> "$GRADLE_PROPS"
+          echo "Fixed gradle.properties"
+
       - name: Build
         run: |
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"

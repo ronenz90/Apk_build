@@ -126,10 +126,12 @@ jobs:
           BUILD_GRADLE_KTS="$PROJECT_DIR/app/build.gradle.kts"
 
           if [ -f "$BUILD_GRADLE" ]; then
-            sed -i "s/applicationId ".*"/applicationId "$PACKAGE"/" "$BUILD_GRADLE"
+            sed -i 's|applicationId ".*"|applicationId "'"$PACKAGE"'"|g' "$BUILD_GRADLE"
+            grep "applicationId" "$BUILD_GRADLE" || true
             echo "Set applicationId = $PACKAGE (Groovy)"
           elif [ -f "$BUILD_GRADLE_KTS" ]; then
-            sed -i "s/applicationId = ".*"/applicationId = "$PACKAGE"/" "$BUILD_GRADLE_KTS"
+            sed -i 's|applicationId = ".*"|applicationId = "'"$PACKAGE"'"|g' "$BUILD_GRADLE_KTS"
+            grep "applicationId" "$BUILD_GRADLE_KTS" || true
             echo "Set applicationId = $PACKAGE (Kotlin DSL)"
           fi
 

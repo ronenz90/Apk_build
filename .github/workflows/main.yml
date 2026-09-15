@@ -50,7 +50,6 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           packages: >-
-            tools
             platform-tools
             platforms;android-34
             platforms;android-33
@@ -118,25 +117,18 @@ jobs:
           grep -E "versionCode|versionName" "$GRADLE_FILE" || true
 
       - name: Override package name (AAB only)
-        if: github.event.inputs.build_type == 'aab'
+        if: github.event.inputs.build_type == 'aab' && github.event.inputs.package_name != ''
         run: |
-          PACKAGE="${{ github.event.inputs.package_name }}"
-          echo "Package name received: '$PACKAGE'"
-          if [ -z "$PACKAGE" ]; then
-            echo "No package name provided — skipping"
-            exit 0
-          fi
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
+          PACKAGE="${{ github.event.inputs.package_name }}"
           BUILD_GRADLE="$PROJECT_DIR/app/build.gradle"
           BUILD_GRADLE_KTS="$PROJECT_DIR/app/build.gradle.kts"
 
           if [ -f "$BUILD_GRADLE" ]; then
-            perl -i -pe 's/applicationId "[^"]*"/applicationId "'"$PACKAGE"'"/g' "$BUILD_GRADLE"
-            grep "applicationId" "$BUILD_GRADLE" || true
+            sed -i "s/applicationId ".*"/applicationId "$PACKAGE"/" "$BUILD_GRADLE"
             echo "Set applicationId = $PACKAGE (Groovy)"
           elif [ -f "$BUILD_GRADLE_KTS" ]; then
-            perl -i -pe 's/applicationId = "[^"]*"/applicationId = "'"$PACKAGE"'"/g' "$BUILD_GRADLE_KTS"
-            grep "applicationId" "$BUILD_GRADLE_KTS" || true
+            sed -i "s/applicationId = ".*"/applicationId = "$PACKAGE"/" "$BUILD_GRADLE_KTS"
             echo "Set applicationId = $PACKAGE (Kotlin DSL)"
           fi
 

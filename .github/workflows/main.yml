@@ -116,20 +116,38 @@ jobs:
           echo "=== Final version ==="
           grep -E "versionCode|versionName" "$GRADLE_FILE" || true
 
-      - name: Override package name (AAB only)
-        if: github.event.inputs.build_type == 'aab' && github.event.inputs.package_name != ''
+            - name: Override package name (AAB only)
+        if: github.event.inputs.build_type == 'aab'
+        env:
+          PACKAGE: ${{ github.event.inputs.package_name }}
         run: |
+          echo "Package name received: '$PACKAGE'"
+          if [ -z "$PACKAGE" ]; then
+            echo "No package name provided — skipping"
+            exit 0
+          fi
           PROJECT_DIR="${{ steps.find_root.outputs.project_dir }}"
-          PACKAGE="${{ github.event.inputs.package_name }}"
           BUILD_GRADLE="$PROJECT_DIR/app/build.gradle"
           BUILD_GRADLE_KTS="$PROJECT_DIR/app/build.gradle.kts"
 
           if [ -f "$BUILD_GRADLE" ]; then
-            sed -i "s/applicationId ".*"/applicationId "$PACKAGE"/" "$BUILD_GRADLE"
-            echo "Set applicationId = $PACKAGE (Groovy)"
+            python3 - "$PACKAGE" "$BUILD_GRADLE" << 'PYEOF2'
+import re, sys
+content = open(sys.argv[2]).read()
+content = re.sub(r'applicationId ".*?"', 'applicationId "' + sys.argv[1] + '"', content)
+open(sys.argv[2], 'w').write(content)
+print("Set applicationId =", sys.argv[1])
+PYEOF2
+            grep "applicationId" "$BUILD_GRADLE" || true
           elif [ -f "$BUILD_GRADLE_KTS" ]; then
-            sed -i "s/applicationId = ".*"/applicationId = "$PACKAGE"/" "$BUILD_GRADLE_KTS"
-            echo "Set applicationId = $PACKAGE (Kotlin DSL)"
+            python3 - "$PACKAGE" "$BUILD_GRADLE_KTS" << 'PYEOF2'
+import re, sys
+content = open(sys.argv[2]).read()
+content = re.sub(r'applicationId = ".*?"', 'applicationId = "' + sys.argv[1] + '"', content)
+open(sys.argv[2], 'w').write(content)
+print("Set applicationId =", sys.argv[1])
+PYEOF2
+            grep "applicationId" "$BUILD_GRADLE_KTS" || true
           fi
 
       - name: Setup gradlew
